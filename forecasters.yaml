@@ -1,0 +1,72 @@
+# forecasters.yaml — configurable forecaster registry for AgenticForecaster
+#
+# Drop this file next to your script (or pass its path via
+# AgenticForecaster(registry_config="path/to/forecasters.yaml")) to control
+# exactly which forecasters the agent can choose from — no code changes needed.
+#
+# Each entry must have:
+#   name:    unique identifier (used in fit_candidate / commit calls)
+#   module:  dotted import path to the class
+#   class:   class name inside that module
+#   params:  default hyperparameters (passed as **kwargs to the constructor)
+#   summary: one-line description shown to the agent
+#
+# Entries that fail to import are silently skipped, so you can list
+# optional dependencies (pmdarima, statsmodels) without breaking offline use.
+
+forecasters:
+
+  - name: NaiveForecaster
+    module: sktime.forecasting.naive
+    class: NaiveForecaster
+    params:
+      strategy: last
+    summary: "Repeats the last observed value (baseline)."
+
+  - name: MeanForecaster
+    module: sktime.forecasting.naive
+    class: NaiveForecaster
+    params:
+      strategy: mean
+    summary: "Forecasts the historical mean."
+
+  - name: SeasonalNaiveForecaster
+    module: sktime.forecasting.naive
+    class: NaiveForecaster
+    params:
+      strategy: last
+      sp: 1
+    summary: "Repeats the last sp observations (seasonal naive)."
+
+  - name: PolynomialTrendForecaster
+    module: sktime.forecasting.trend
+    class: PolynomialTrendForecaster
+    params:
+      degree: 1
+    summary: "Fits a polynomial trend of given degree."
+
+  - name: ExponentialSmoothing
+    module: sktime.forecasting.exp_smoothing
+    class: ExponentialSmoothing
+    params:
+      trend: add
+    summary: "Holt-Winters exponential smoothing."
+
+  - name: ThetaForecaster
+    module: sktime.forecasting.theta
+    class: ThetaForecaster
+    params: {}
+    summary: "Theta method (strong M3 benchmark performer)."
+
+  - name: AutoARIMA
+    module: sktime.forecasting.arima
+    class: AutoARIMA
+    params:
+      sp: 1
+    summary: "Auto-tuned ARIMA via pmdarima. Best for non-seasonal or low-sp series."
+
+  - name: AutoETS
+    module: sktime.forecasting.ets
+    class: AutoETS
+    params: {}
+    summary: "Auto-tuned ETS via statsmodels."

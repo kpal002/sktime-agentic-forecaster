@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Env / secrets
+.env
+*.env
+.env.*
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Claude local settings
+.claude/
+
+# Test / coverage artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sktime-agentic-forecaster"
+version = "0.0.1"
+description = "Agentic forecaster proof-of-concept for sktime, with optional MCP transport."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Kuntal Pal" }]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+sktime   = ["sktime>=0.30"]
+anthropic = ["anthropic>=0.34"]
+openai   = ["openai>=1.30"]
+gemini   = ["openai>=1.30"]          # Gemini uses Google's OpenAI-compatible endpoint
+mcp      = ["mcp>=1.0"]
+dev      = ["pytest>=7", "ruff>=0.5"]
+all      = ["sktime>=0.30", "anthropic>=0.34", "openai>=1.30", "mcp>=1.0"]
+
+[project.scripts]
+sktime-agentic-mcp = "sktime_agentic.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
