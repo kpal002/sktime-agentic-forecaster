@@ -39,27 +39,51 @@ The agentic-forecaster idea has many shapes. This prototype takes a stance:
 ## Architecture
 
 ```
-                        ┌──────────────────────────────────┐
-   English prompt ───►  │   AgenticForecaster (BaseForecaster)
-   y, X, fh        ───► │                                  │
-                        │   ┌──────────────────────────┐   │
-                        │   │  ReAct loop              │   │
-                        │   │  plan → tool → observe   │   │
-                        │   │  → revise → commit       │   │
-                        │   └────────────┬─────────────┘   │
-                        │                │                 │
-                        │   tools (in-process or MCP)      │
-                        │   ┌────────────▼─────────────┐   │
-                        │   │ list_forecasters         │   │
-                        │   │ inspect_forecaster       │   │
-                        │   │ fit_candidate / score    │   │
-                        │   │ commit                   │   │
-                        │   └──────────────────────────┘   │
-                        │                │                 │
-                        │           sktime registry        │
-                        └──────────────────────────────────┘
-                                   │
-                          y_pred, rationale_, selected_
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                   AgenticForecaster  (sktime BaseForecaster)        │
+  │                                                                     │
+  │   Inputs                          Outputs (after fit)               │
+  │   ──────                          ──────────────────                │
+  │   y, X, fh  ──────────────►       selected_      model name         │
+  │   prompt    ──────────────►       selected_params_                  │
+  │   backend   ──────────────►       rationale_     why it was chosen  │
+  │                                   inner_forecaster_  fitted object  │
+  │                                                                     │
+  │  ┌───────────────────────────────────────────────────────────────┐  │
+  │  │  ReAct Loop  (plan → act → observe → repeat)                 │  │
+  │  │                                                               │  │
+  │  │   step 1 ── summarize_data ──────────────────────────────►   │  │
+  │  │   step 2 ── list_forecasters ────────────────────────────►   │  │
+  │  │   step 3 ── fit_candidate(NaiveForecaster) ──────────────►   │  │
+  │  │   step 4 ── fit_candidate(ExponentialSmoothing) ─────────►   │  │
+  │  │   step 5 ── score(NaiveForecaster, metric=mape) ─────────►   │  │
+  │  │   step 6 ── score(ExponentialSmoothing, metric=mape) ────►   │  │
+  │  │   step 7 ── commit(ExponentialSmoothing, rationale=...) ─►   │  │
+  │  │                                                               │  │
+  │  └───────────────────────┬───────────────────────────────────────┘  │
+  │                          │ tool calls                               │
+  │          ┌───────────────┴────────────────┐                        │
+  │          │  transport                      │                        │
+  │          │                                 │                        │
+  │   ┌──────▼──────────┐      ┌───────────────▼──────────────┐        │
+  │   │  in-process     │  or  │  MCP (stdio / network)       │        │
+  │   │  ToolRegistry   │      │  MCPClientRegistry           │        │
+  │   │                 │      │  → sktime_agentic.mcp_server │        │
+  │   └──────┬──────────┘      └───────────────┬──────────────┘        │
+  │          │                                 │                        │
+  │          └───────────────┬─────────────────┘                        │
+  │                          │                                          │
+  │                 ┌────────▼────────┐                                 │
+  │                 │  sktime / YAML  │  forecaster registry            │
+  │                 │  registry       │  (forecasters.yaml)             │
+  │                 └─────────────────┘                                 │
+  │                                                                     │
+  │  LLM backend (pluggable)                                            │
+  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌─────────────┐   │
+  │  │ Anthropic  │  │  OpenAI   │  │   Gemini   │  │    Mock     │   │
+  │  │  Claude    │  │   GPT-4o  │  │  2.0 Flash │  │ (offline)   │   │
+  │  └────────────┘  └────────────┘  └────────────┘  └─────────────┘   │
+  └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Status
