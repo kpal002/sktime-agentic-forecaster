@@ -1,5 +1,5 @@
 # sktime-agentic-forecaster — HF Space requirements
-# rebuild: 2026-05-01
+# rebuild: 2026-05-01e  (float→int coercion + statsmodels/pmdarima)
 sktime-agentic-forecaster[sktime,gemini] @ git+https://github.com/kpal002/sktime-agentic-forecaster.git
 gradio>=6.0
 google-generativeai>=0.7
@@ -8,3 +8,5 @@ anthropic>=0.34
 numpy>=1.24
 pandas>=2.0
 matplotlib>=3.7
+statsmodels>=0.14
+pmdarima>=2.0

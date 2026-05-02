@@ -606,16 +606,23 @@ def _proto_to_python(obj: Any) -> Any:
     Gemini returns tool arguments as proto map objects.  A shallow ``dict()``
     call only converts the top level — nested values stay as MapComposite and
     break downstream code.  This walks the whole tree.
+
+    Also converts whole-number floats (e.g. 12.0) to ints, because proto
+    serialises integer-valued fields as float64 and sktime parameters such as
+    ``sp`` require a strict Python int.
     """
     # proto map (behaves like a Mapping)
     if hasattr(obj, "items"):
         return {k: _proto_to_python(v) for k, v in obj.items()}
-    # proto repeated / list-like
+    # proto repeated / list-like (but not str/bytes)
     if hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
         try:
             return [_proto_to_python(v) for v in obj]
         except TypeError:
             pass
+    # whole-number float → int  (e.g. sp=12.0 → sp=12)
+    if isinstance(obj, float) and obj.is_integer():
+        return int(obj)
     return obj
 
 
