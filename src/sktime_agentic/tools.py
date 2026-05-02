@@ -380,44 +380,107 @@ class ToolRegistry:
         self._fitted_candidates[name] = (f, params)
         return {"name": name, "ok": True, "params": params}
 
-    def score(self, name: str, metric: str = "mape") -> dict[str, Any]:
-        """Score a previously-fitted candidate on the holdout window."""
+    def score(
+        self,
+        name: str,
+        metric: str = "mape",
+        cv: str = "holdout",
+        n_splits: int = 3,
+    ) -> dict[str, Any]:
+        """Score a previously-fitted candidate.
+
+        Parameters
+        ----------
+        name : str
+            Name of a fitted candidate (must have called fit_candidate first).
+        metric : str
+            One of ``"mape"``, ``"mae"``, ``"rmse"``.
+        cv : str
+            ``"holdout"`` (default) — single trailing window, fast.
+            ``"expanding"`` — expanding-window cross-validation over
+            ``n_splits`` folds.  More reliable, especially for short series
+            or when the holdout period might be atypical.
+        n_splits : int
+            Number of CV folds when ``cv="expanding"``.  Ignored for
+            ``cv="holdout"``.
+        """
         if name not in self._fitted_candidates:
             return {"name": name, "ok": False, "error": "fit_candidate first"}
         if not self._holdout:
             return {"name": name, "ok": False, "error": "no holdout configured"}
 
-        f, _ = self._fitted_candidates[name]
+        _, params = self._fitted_candidates[name]
         y = self._y
         n = len(y)
         h = self._holdout
-        y_holdout = y.iloc[n - h :] if isinstance(y, pd.Series) else y[n - h :]
-        try:
-            y_pred = f.predict(list(range(1, h + 1)))
-        except Exception as e:
-            return {"name": name, "ok": False, "error": f"predict failed: {e}"}
 
-        y_true = np.asarray(y_holdout, dtype=float)
-        y_pred = np.asarray(y_pred, dtype=float)
-
-        if metric == "mape":
-            if SKTIME_AVAILABLE:
-                value = float(mean_absolute_percentage_error(y_true, y_pred, symmetric=False))
-            else:
+        def _metric(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+            y_true = np.asarray(y_true, dtype=float)
+            y_pred = np.asarray(y_pred, dtype=float)
+            if metric == "mape":
+                if SKTIME_AVAILABLE:
+                    return float(mean_absolute_percentage_error(y_true, y_pred, symmetric=False))
                 with np.errstate(divide="ignore", invalid="ignore"):
                     err = np.abs(y_true - y_pred) / np.maximum(np.abs(y_true), 1e-9)
-                value = float(np.nanmean(err))
-        elif metric == "mae":
-            value = float(np.nanmean(np.abs(y_true - y_pred)))
-        elif metric == "rmse":
-            value = float(np.sqrt(np.nanmean((y_true - y_pred) ** 2)))
+                return float(np.nanmean(err))
+            elif metric == "mae":
+                return float(np.nanmean(np.abs(y_true - y_pred)))
+            elif metric == "rmse":
+                return float(np.sqrt(np.nanmean((y_true - y_pred) ** 2)))
+            else:
+                raise ValueError(f"unknown metric: {metric}")
+
+        reg = self._registry()
+        if name not in reg:
+            return {"name": name, "ok": False, "error": f"unknown forecaster: {name}"}
+        cls = reg[name]["cls"]
+
+        if cv == "expanding":
+            # Expanding-window CV: train on [0..split], test on [split..split+h]
+            # Minimum train size = n - h * (n_splits + 1) to leave room for all folds
+            min_train = max(h * 2, n - h * (n_splits + 1))
+            fold_scores: list[float] = []
+            for fold in range(n_splits):
+                train_end = min_train + fold * h
+                test_start = train_end
+                test_end = test_start + h
+                if test_end > n:
+                    break
+                y_train = y.iloc[:train_end] if isinstance(y, pd.Series) else y[:train_end]
+                y_test  = y.iloc[test_start:test_end] if isinstance(y, pd.Series) else y[test_start:test_end]
+                try:
+                    f_cv = cls(**dict(params or {}))
+                    f_cv.fit(y_train, fh=list(range(1, h + 1)))
+                    y_pred_cv = f_cv.predict(list(range(1, h + 1)))
+                    fold_scores.append(_metric(y_test, y_pred_cv))
+                except Exception:
+                    continue
+            if not fold_scores:
+                return {"name": name, "ok": False, "error": "all CV folds failed"}
+            value = float(np.mean(fold_scores))
+            n_folds_run = len(fold_scores)
         else:
-            return {"name": name, "ok": False, "error": f"unknown metric: {metric}"}
+            # Single holdout window (original behaviour)
+            f, _ = self._fitted_candidates[name]
+            y_holdout = y.iloc[n - h:] if isinstance(y, pd.Series) else y[n - h:]
+            try:
+                y_pred = f.predict(list(range(1, h + 1)))
+            except Exception as e:
+                return {"name": name, "ok": False, "error": f"predict failed: {e}"}
+            try:
+                value = _metric(y_holdout, y_pred)
+            except ValueError as e:
+                return {"name": name, "ok": False, "error": str(e)}
+            n_folds_run = 1
 
         if not math.isfinite(value):
             value = float("inf")
         self._scores[name] = value
-        return {"name": name, "ok": True, "metric": metric, "value": value}
+        return {
+            "name": name, "ok": True,
+            "metric": metric, "value": value,
+            "cv": cv, "n_folds": n_folds_run,
+        }
 
     def commit(
         self,
@@ -606,13 +669,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "score",
-        "description": "Score a previously-fitted candidate on the holdout window. Metric "
-        "is one of mape | mae | rmse.",
+        "description": (
+            "Score a previously-fitted candidate. "
+            "metric: mape | mae | rmse. "
+            "cv: 'holdout' (single trailing window, fast) or 'expanding' "
+            "(expanding-window cross-validation over n_splits folds — more "
+            "reliable for short or noisy series). "
+            "Use cv='expanding' when the series is short (<60 obs) or when "
+            "you want a more robust estimate."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string"},
-                "metric": {"type": "string", "enum": ["mape", "mae", "rmse"]},
+                "name":     {"type": "string"},
+                "metric":   {"type": "string", "enum": ["mape", "mae", "rmse"]},
+                "cv":       {"type": "string", "enum": ["holdout", "expanding"],
+                             "description": "Scoring strategy. Default: holdout."},
+                "n_splits": {"type": "integer", "minimum": 2, "maximum": 10,
+                             "description": "Number of CV folds (expanding only). Default: 3."},
             },
             "required": ["name"],
         },

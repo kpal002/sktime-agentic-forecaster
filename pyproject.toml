@@ -25,6 +25,7 @@ dev      = ["pytest>=7", "ruff>=0.5"]
 all      = ["sktime>=0.30", "anthropic>=0.34", "openai>=1.30", "mcp>=1.0"]
 
 [project.scripts]
+sktime-agentic     = "sktime_agentic.cli:main"
 sktime-agentic-mcp = "sktime_agentic.mcp_server:main"
 
 [tool.setuptools.packages.find]
