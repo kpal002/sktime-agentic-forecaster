@@ -165,12 +165,12 @@ def run_forecast(
         )
         f.fit(y, fh=list(range(1, fh + 1)))
     except Exception as e:
-        return None, f"❌ Fit failed: {e}", ""
+        return None, f"❌ Fit failed: {type(e).__name__}: {e}", ""
 
     try:
         y_pred = f.predict()
     except Exception as e:
-        return None, f"❌ Predict failed: {e}", ""
+        return None, f"❌ Predict failed: {type(e).__name__}: {e}", ""
 
     # ── plot ─────────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 4), facecolor="#0F1117")

@@ -179,8 +179,17 @@ class AgenticForecaster(BaseForecaster):
         self.selected_params_ = result.params
         self.rationale_ = result.rationale
         self.transcript_ = result.transcript
-        self.inner_forecaster_ = registry._committed["forecaster"]
         self._registry_ = registry
+
+        # The agent evaluated candidates on y[:-holdout]. For the final model
+        # we refit on the FULL y so predictions start from the right cutoff.
+        inner = registry._committed["forecaster"]
+        try:
+            inner.fit(y, fh=fh)
+        except Exception:
+            pass  # fallback: keep the holdout-fitted version
+        self.inner_forecaster_ = inner
+
         return self
 
     def explain(self, fh=None) -> dict[str, Any]:
