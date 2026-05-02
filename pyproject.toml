@@ -21,7 +21,7 @@ anthropic = ["anthropic>=0.34"]
 openai   = ["openai>=1.30"]
 gemini   = ["openai>=1.30"]          # Gemini uses Google's OpenAI-compatible endpoint
 mcp      = ["mcp>=1.0"]
-dev      = ["pytest>=7", "ruff>=0.5"]
+dev      = ["pytest>=7", "pytest-timeout>=2.0", "ruff>=0.5"]
 all      = ["sktime>=0.30", "anthropic>=0.34", "openai>=1.30", "mcp>=1.0"]
 
 [project.scripts]

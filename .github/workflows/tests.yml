@@ -24,6 +24,7 @@ jobs:
       - name: Install package + dependencies
         run: |
           pip install -e ".[sktime,mcp,dev]"
+          pip install pytest-timeout
 
       - name: Run tests
         run: |
