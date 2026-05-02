@@ -33,6 +33,9 @@ class ReActLoop:
     user_prompt: str
     max_steps: int = 12
 
+    # How many steps before the limit to inject a "commit now" warning.
+    _WARN_STEPS_BEFORE_LIMIT = 3
+
     def run(self) -> ReActResult:
         transcript: list[dict[str, Any]] = []
         messages: list[dict[str, Any]] = [
@@ -42,6 +45,33 @@ class ReActLoop:
 
         rationale = ""
         for step_idx in range(1, self.max_steps + 1):
+            # ── Step-budget warning ──────────────────────────────────────────
+            # When the agent is close to the limit and hasn't committed yet,
+            # prepend a hard nudge before the next LLM call.
+            steps_left = self.max_steps - step_idx
+            if (
+                getattr(self.registry, "_committed", None) is None
+                and steps_left <= self._WARN_STEPS_BEFORE_LIMIT
+                and steps_left > 0
+            ):
+                scored = getattr(self.registry, "_scores", {})
+                if scored:
+                    best = min(scored, key=scored.__getitem__)
+                    hint = (
+                        f"WARNING: Only {steps_left} step(s) remaining. "
+                        f"You MUST call `commit` now. "
+                        f"Best candidate so far: '{best}' "
+                        f"(score={scored[best]:.4f}). "
+                        "Call commit immediately — no more fitting or scoring."
+                    )
+                else:
+                    hint = (
+                        f"WARNING: Only {steps_left} step(s) remaining. "
+                        "You MUST call `commit` now with the best candidate you have. "
+                        "No more fitting or inspecting — commit immediately."
+                    )
+                messages.append({"role": "user", "content": hint})
+
             actions = self.client.step(self.system_prompt, messages, tools)
             transcript.append({"step": step_idx, "actions": actions})
 
@@ -74,7 +104,7 @@ class ReActLoop:
             if not tool_uses:
                 # Model stopped without committing — inject a strong reminder
                 # and give it one more chance rather than failing hard.
-                if self.registry._committed is None and step_idx < self.max_steps:
+                if getattr(self.registry, "_committed", None) is None and step_idx < self.max_steps:
                     messages.append({
                         "role": "user",
                         "content": (
@@ -126,6 +156,31 @@ class ReActLoop:
                     if extra and extra not in rationale:
                         rationale = (rationale + "\n\n" + extra).strip()
                 break
+
+        # ── Auto-commit fallback ─────────────────────────────────────────────
+        # If the agent exhausted all steps without committing but did score at
+        # least one candidate, pick the best and commit automatically rather
+        # than surfacing a hard error to the user.
+        _scores = getattr(self.registry, "_scores", {})
+        if getattr(self.registry, "_committed", None) is None and _scores:
+            best_name = min(_scores, key=_scores.__getitem__)
+            # _fitted_candidates stores (forecaster, params) tuples
+            fitted = getattr(self.registry, "_fitted_candidates", {}).get(best_name)
+            best_params = dict(fitted[1]) if fitted else {}
+            auto_rationale = (
+                f"Auto-committed '{best_name}' (best score="
+                f"{_scores[best_name]:.4f}) after step budget exhausted."
+            )
+            try:
+                self.registry.call(
+                    tool_name="commit",
+                    name=best_name,
+                    params=best_params,
+                    rationale=auto_rationale,
+                )
+                rationale = auto_rationale
+            except Exception:  # noqa: BLE001
+                pass
 
         committed = self.registry._committed or {}
         return ReActResult(
