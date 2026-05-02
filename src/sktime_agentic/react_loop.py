@@ -158,29 +158,57 @@ class ReActLoop:
                 break
 
         # ── Auto-commit fallback ─────────────────────────────────────────────
-        # If the agent exhausted all steps without committing but did score at
-        # least one candidate, pick the best and commit automatically rather
-        # than surfacing a hard error to the user.
+        # If the agent exhausted all steps without committing, pick a sensible
+        # candidate and commit automatically rather than surfacing a hard
+        # error.  Three-tier strategy:
+        #   1. Best by score, if any candidate was successfully scored.
+        #   2. Try fast holdout-score on every fitted candidate, pick the best.
+        #   3. Just commit any fitted candidate.
         _scores = getattr(self.registry, "_scores", {})
-        if getattr(self.registry, "_committed", None) is None and _scores:
-            best_name = min(_scores, key=_scores.__getitem__)
-            # _fitted_candidates stores (forecaster, params) tuples
-            fitted = getattr(self.registry, "_fitted_candidates", {}).get(best_name)
-            best_params = dict(fitted[1]) if fitted else {}
-            auto_rationale = (
-                f"Auto-committed '{best_name}' (best score="
-                f"{_scores[best_name]:.4f}) after step budget exhausted."
-            )
-            try:
-                self.registry.call(
-                    tool_name="commit",
-                    name=best_name,
-                    params=best_params,
-                    rationale=auto_rationale,
+        _fitted = getattr(self.registry, "_fitted_candidates", {})
+
+        if getattr(self.registry, "_committed", None) is None:
+            best_name: str | None = None
+            best_score: float | None = None
+
+            if _scores:
+                best_name = min(_scores, key=_scores.__getitem__)
+                best_score = _scores[best_name]
+            elif _fitted:
+                # Tier 2: try a quick holdout score on each fitted candidate.
+                for name in list(_fitted.keys()):
+                    try:
+                        result = self.registry.call(
+                            tool_name="score", name=name,
+                            metric="mape", cv="holdout",
+                        )
+                        if isinstance(result, dict) and result.get("ok"):
+                            v = result.get("value")
+                            if v is not None and (best_score is None or v < best_score):
+                                best_name, best_score = name, float(v)
+                    except Exception:  # noqa: BLE001
+                        continue
+                # Tier 3: still nothing — just take any fitted candidate.
+                if best_name is None:
+                    best_name = next(iter(_fitted))
+
+            if best_name is not None:
+                fitted = _fitted.get(best_name)
+                best_params = dict(fitted[1]) if fitted else {}
+                score_str = f", score={best_score:.4f}" if best_score is not None else ""
+                auto_rationale = (
+                    f"Auto-committed '{best_name}'{score_str} after step budget "
+                    f"exhausted. The agent completed evaluation but did not call "
+                    f"`commit` in time."
                 )
-                rationale = auto_rationale
-            except Exception:  # noqa: BLE001
-                pass
+                try:
+                    self.registry.call(
+                        tool_name="commit", name=best_name,
+                        params=best_params, rationale=auto_rationale,
+                    )
+                    rationale = auto_rationale
+                except Exception:  # noqa: BLE001
+                    pass
 
         committed = self.registry._committed or {}
         return ReActResult(
