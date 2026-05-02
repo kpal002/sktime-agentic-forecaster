@@ -110,11 +110,42 @@ def _load_series(file_obj, date_col: str, target_col: str) -> pd.Series:
         pass
 
     if target_col and target_col in df.columns:
-        return df[target_col].dropna()
-    numeric = df.select_dtypes("number").columns.tolist()
-    if not numeric:
-        raise ValueError("No numeric columns found in the CSV.")
-    return df[numeric[0]].dropna()
+        s = df[target_col].dropna()
+    else:
+        numeric = df.select_dtypes("number").columns.tolist()
+        if not numeric:
+            raise ValueError("No numeric columns found in the CSV.")
+        s = df[numeric[0]].dropna()
+
+    # sktime requires a frequency on the index.  Convert DatetimeIndex →
+    # PeriodIndex with the inferred freq.  Map common DatetimeIndex codes
+    # ("MS", "QS", "AS", "BMS"…) to their PeriodIndex equivalents.
+    if isinstance(s.index, pd.DatetimeIndex):
+        inferred = pd.infer_freq(s.index)
+        if inferred:
+            period_freq = _datetime_freq_to_period(inferred)
+            try:
+                s.index = s.index.to_period(period_freq)
+            except Exception:
+                # Last-ditch: at least set a freq on the DatetimeIndex
+                try:
+                    s = s.asfreq(inferred)
+                except Exception:
+                    pass
+    return s
+
+
+def _datetime_freq_to_period(freq: str) -> str:
+    """Map a DatetimeIndex freq code to a PeriodIndex-compatible freq code."""
+    f = freq.upper()
+    # Strip start/end markers that PeriodIndex doesn't accept.
+    mapping = {
+        "MS": "M", "M": "M", "ME": "M", "BM": "M", "BMS": "M",
+        "QS": "Q", "Q": "Q", "QE": "Q", "BQ": "Q", "BQS": "Q",
+        "AS": "A", "A": "A", "Y": "A", "YS": "A", "YE": "A", "BA": "A", "BAS": "A",
+        "W": "W", "D": "D", "B": "B", "H": "H",
+    }
+    return mapping.get(f, f)
 
 
 def _auto_backend() -> str:
