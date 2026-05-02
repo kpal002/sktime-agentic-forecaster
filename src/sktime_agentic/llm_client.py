@@ -25,7 +25,7 @@ Supported backends
 * ``MockLLMClient``     — deterministic offline policy (no API key needed)
 * ``AnthropicClient``   — Claude via ``anthropic`` SDK (prompt-cached)
 * ``OpenAIClient``      — OpenAI GPT models via ``openai`` SDK
-* ``GeminiClient``      — Google Gemini via OpenAI-compatible endpoint
+* ``GeminiClient``      — Google Gemini via native google-generativeai SDK (gemini-2.5-flash+)
 
 All four classes have the same constructor shape so you can swap them freely::
 
@@ -475,39 +475,152 @@ class OpenAIClient:
 
 
 # --------------------------------------------------------------------------- #
-# Gemini backend  (uses Google's OpenAI-compatible endpoint)
+# Gemini backend  (native google-generativeai SDK)
 # --------------------------------------------------------------------------- #
+
+
+def _to_gemini_tools(tools: list[dict[str, Any]]) -> list[Any]:
+    """Convert Anthropic tool schemas → Gemini FunctionDeclaration list."""
+    import google.generativeai.types as genai_types  # type: ignore
+    decls = []
+    for t in tools:
+        schema = t.get("input_schema", {"type": "object", "properties": {}})
+        decls.append(genai_types.FunctionDeclaration(
+            name=t["name"],
+            description=t.get("description", ""),
+            parameters=schema,
+        ))
+    return [genai_types.Tool(function_declarations=decls)]
+
+
+def _to_gemini_contents(
+    system: str,
+    messages: list[dict[str, Any]],
+) -> list[Any]:
+    """Convert Anthropic-canonical messages → Gemini Content list.
+
+    Gemini doesn't have a system role — prepend it as a user turn.
+    Tool results need the function name, which we look up from the
+    preceding assistant turn.
+    """
+    import google.generativeai as genai  # type: ignore
+
+    contents = []
+    # System prompt as first user turn
+    if system:
+        contents.append({"role": "user", "parts": [{"text": system}]})
+        contents.append({"role": "model", "parts": [{"text": "Understood."}]})
+
+    # name lookup: tool_use_id → function name
+    id_to_name: dict[str, str] = {}
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        if isinstance(content, str):
+            contents.append({"role": "user" if role == "user" else "model",
+                             "parts": [{"text": content}]})
+            continue
+
+        if role == "assistant":
+            parts = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text" and block.get("text"):
+                    parts.append({"text": block["text"]})
+                elif block.get("type") == "tool_use":
+                    id_to_name[block["id"]] = block["name"]
+                    parts.append({"function_call": {
+                        "name": block["name"],
+                        "args": block.get("input", {}),
+                    }})
+            if parts:
+                contents.append({"role": "model", "parts": parts})
+
+        elif role == "user":
+            fn_parts = []
+            text_parts = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_result":
+                    raw = block.get("content", "")
+                    if isinstance(raw, list):
+                        raw = "".join(b.get("text", "") for b in raw if isinstance(b, dict))
+                    fn_name = id_to_name.get(block.get("tool_use_id", ""), "unknown")
+                    fn_parts.append({"function_response": {
+                        "name": fn_name,
+                        "response": {"result": str(raw)},
+                    }})
+                elif block.get("type") == "text" and block.get("text"):
+                    text_parts.append(block["text"])
+            if fn_parts:
+                contents.append({"role": "user", "parts": fn_parts})
+            if text_parts:
+                contents.append({"role": "user",
+                                 "parts": [{"text": " ".join(text_parts)}]})
+
+    return contents
+
+
+def _from_gemini_response(response: Any) -> list[dict[str, Any]]:
+    """Convert a Gemini GenerateContentResponse → Anthropic-style actions."""
+    actions: list[dict[str, Any]] = []
+    try:
+        parts = response.candidates[0].content.parts
+    except (IndexError, AttributeError):
+        return [{"type": "stop", "rationale": ""}]
+
+    text_parts = []
+    for part in parts:
+        if hasattr(part, "function_call") and part.function_call.name:
+            fc = part.function_call
+            actions.append({
+                "type": "tool_use",
+                "id": f"gemini-{fc.name}-{id(fc)}",
+                "name": fc.name,
+                "input": dict(fc.args or {}),
+            })
+        elif hasattr(part, "text") and part.text:
+            text_parts.append(part.text)
+
+    if not actions:
+        actions.append({"type": "stop", "rationale": " ".join(text_parts).strip()})
+    return actions
 
 
 @dataclass
 class GeminiClient:
-    """Google Gemini tool-use backend via the OpenAI-compatible endpoint.
+    """Google Gemini tool-use backend via the native google-generativeai SDK.
 
-    Requires ``pip install openai`` and a valid ``GEMINI_API_KEY``
-    (from https://aistudio.google.com/apikey).
+    Supports all Gemini models including ``gemini-2.5-flash``.
 
-    Google exposes an OpenAI-compatible API at::
-
-        https://generativelanguage.googleapis.com/v1beta/openai/
-
-    so we reuse ``OpenAIClient`` internally — no extra SDK needed.
+    Requires ``pip install google-generativeai`` and a valid ``GEMINI_API_KEY``
+    (free key from https://aistudio.google.com/apikey).
 
     Parameters
     ----------
     model : str
-        Default: ``"gemini-2.0-flash"``.
+        Default: ``"gemini-2.5-flash"``.
     api_key : str | None
         Falls back to ``GEMINI_API_KEY`` then ``GOOGLE_API_KEY`` env vars.
     """
 
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-2.5-flash"
     max_tokens: int = 2048
     api_key: str | None = None
-    _inner: Any = field(default=None, init=False, repr=False)
-
-    _GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    _genai: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
+        try:
+            import google.generativeai as genai  # type: ignore
+        except ImportError as exc:
+            raise ImportError(
+                "GeminiClient requires the `google-generativeai` package. "
+                "Install with: pip install google-generativeai"
+            ) from exc
         key = (
             self.api_key
             or os.environ.get("GEMINI_API_KEY")
@@ -515,16 +628,11 @@ class GeminiClient:
         )
         if not key:
             raise ValueError(
-                "GeminiClient requires GEMINI_API_KEY (or GOOGLE_API_KEY) to be set. "
+                "GeminiClient requires GEMINI_API_KEY (or GOOGLE_API_KEY). "
                 "Get a free key at https://aistudio.google.com/apikey"
             )
-        # Delegate to OpenAIClient, pointing at Gemini's endpoint.
-        self._inner = OpenAIClient(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            api_key=key,
-            base_url=self._GEMINI_BASE_URL,
-        )
+        genai.configure(api_key=key)
+        self._genai = genai
 
     def step(
         self,
@@ -532,7 +640,16 @@ class GeminiClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:  # pragma: no cover - exercised live
-        return self._inner.step(system, messages, tools)
+        model = self._genai.GenerativeModel(
+            model_name=self.model,
+            tools=_to_gemini_tools(tools),
+        )
+        contents = _to_gemini_contents(system, messages)
+        response = model.generate_content(
+            contents,
+            generation_config={"max_output_tokens": self.max_tokens},
+        )
+        return _from_gemini_response(response)
 
     def explain(  # pragma: no cover - exercised live
         self,
@@ -542,9 +659,19 @@ class GeminiClient:
         fingerprint: dict[str, Any],
         predictions: list[tuple[int, float]],
     ) -> dict[str, Any]:
-        return self._inner.explain(
+        user = _explain_user_prompt(
             forecaster_name, forecaster_params, rationale, fingerprint, predictions
         )
+        model = self._genai.GenerativeModel(model_name=self.model)
+        response = model.generate_content(
+            f"{_explain_system_prompt()}\n\n{user}",
+            generation_config={"max_output_tokens": 1024},
+        )
+        raw = response.text or ""
+        return _parse_explain_response(raw, dict(
+            forecaster_name=forecaster_name, forecaster_params=forecaster_params,
+            rationale=rationale, fingerprint=fingerprint, predictions=predictions,
+        ))
 
 
 # --------------------------------------------------------------------------- #

@@ -1,6 +1,8 @@
 gradio>=4.0
 sktime>=0.30
+google-generativeai>=0.7
 openai>=1.30
+anthropic>=0.34
 numpy>=1.24
 pandas>=2.0
 matplotlib>=3.7
