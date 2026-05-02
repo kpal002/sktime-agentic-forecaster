@@ -293,7 +293,7 @@ class AgenticForecaster(BaseForecaster):
     _DEFAULT_MODELS: dict[str, str] = {
         "anthropic": "claude-sonnet-4-6",
         "openai": "gpt-4o",
-        "gemini": "gemini-2.5-flash-preview-04-17",
+        "gemini": "gemini-2.5-flash",
     }
 
     def _build_llm(self) -> LLMClient:
