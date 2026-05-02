@@ -1,4 +1,4 @@
-git+https://github.com/kpal002/sktime-agentic-forecaster.git#egg=sktime-agentic-forecaster[sktime,gemini]
+sktime-agentic-forecaster[sktime,gemini] @ git+https://github.com/kpal002/sktime-agentic-forecaster.git
 gradio>=6.0
 google-generativeai>=0.7
 openai>=1.30
