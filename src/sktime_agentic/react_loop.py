@@ -72,7 +72,19 @@ class ReActLoop:
                 messages.append({"role": "assistant", "content": assistant_blocks})
 
             if not tool_uses:
-                # No tool calls means the model is done.
+                # Model stopped without committing — inject a strong reminder
+                # and give it one more chance rather than failing hard.
+                if self.registry._committed is None and step_idx < self.max_steps:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "IMPORTANT: You stopped without calling `commit`. "
+                            "You MUST call the `commit` tool now with the best "
+                            "forecaster you have evaluated so far. "
+                            "Do not produce any text — call `commit` immediately."
+                        ),
+                    })
+                    continue
                 break
 
             # Run each tool call and append a `tool_result` block in a single
