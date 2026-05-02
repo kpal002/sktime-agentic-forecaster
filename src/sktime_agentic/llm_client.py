@@ -479,16 +479,51 @@ class OpenAIClient:
 # --------------------------------------------------------------------------- #
 
 
+_GEMINI_UNSUPPORTED_SCHEMA_KEYS = frozenset({
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+    "multipleOf", "minLength", "maxLength", "pattern",
+    "minItems", "maxItems", "uniqueItems",
+    "minProperties", "maxProperties",
+    "default", "examples", "format",
+    "$schema", "$id", "$ref", "$defs",
+})
+
+
+def _strip_gemini_schema(schema: Any) -> Any:
+    """Recursively remove JSON Schema keywords that Gemini's FunctionDeclaration rejects."""
+    if not isinstance(schema, dict):
+        return schema
+    out = {}
+    for k, v in schema.items():
+        if k in _GEMINI_UNSUPPORTED_SCHEMA_KEYS:
+            continue
+        if k == "properties" and isinstance(v, dict):
+            out[k] = {pk: _strip_gemini_schema(pv) for pk, pv in v.items()}
+        elif k == "items":
+            out[k] = _strip_gemini_schema(v)
+        elif k in ("anyOf", "oneOf", "allOf") and isinstance(v, list):
+            out[k] = [_strip_gemini_schema(s) for s in v]
+        else:
+            out[k] = v
+    return out
+
+
 def _to_gemini_tools(tools: list[dict[str, Any]]) -> list[Any]:
-    """Convert Anthropic tool schemas → Gemini FunctionDeclaration list."""
+    """Convert Anthropic tool schemas → Gemini FunctionDeclaration list.
+
+    Gemini's FunctionDeclaration only accepts a restricted OpenAPI 3.0 subset.
+    Unsupported JSON Schema keywords (minimum, maximum, default, format, …)
+    are stripped before the schema is handed to the SDK.
+    """
     import google.generativeai.types as genai_types  # type: ignore
     decls = []
     for t in tools:
         schema = t.get("input_schema", {"type": "object", "properties": {}})
+        clean_schema = _strip_gemini_schema(schema)
         decls.append(genai_types.FunctionDeclaration(
             name=t["name"],
             description=t.get("description", ""),
-            parameters=schema,
+            parameters=clean_schema,
         ))
     return [genai_types.Tool(function_declarations=decls)]
 
