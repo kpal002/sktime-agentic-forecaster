@@ -600,6 +600,25 @@ def _to_gemini_contents(
     return contents
 
 
+def _proto_to_python(obj: Any) -> Any:
+    """Recursively convert proto MapComposite / RepeatedComposite to plain Python dicts/lists.
+
+    Gemini returns tool arguments as proto map objects.  A shallow ``dict()``
+    call only converts the top level — nested values stay as MapComposite and
+    break downstream code.  This walks the whole tree.
+    """
+    # proto map (behaves like a Mapping)
+    if hasattr(obj, "items"):
+        return {k: _proto_to_python(v) for k, v in obj.items()}
+    # proto repeated / list-like
+    if hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
+        try:
+            return [_proto_to_python(v) for v in obj]
+        except TypeError:
+            pass
+    return obj
+
+
 def _from_gemini_response(response: Any) -> list[dict[str, Any]]:
     """Convert a Gemini GenerateContentResponse → Anthropic-style actions."""
     actions: list[dict[str, Any]] = []
@@ -616,7 +635,7 @@ def _from_gemini_response(response: Any) -> list[dict[str, Any]]:
                 "type": "tool_use",
                 "id": f"gemini-{fc.name}-{id(fc)}",
                 "name": fc.name,
-                "input": dict(fc.args or {}),
+                "input": _proto_to_python(fc.args) if fc.args else {},
             })
         elif hasattr(part, "text") and part.text:
             text_parts.append(part.text)
