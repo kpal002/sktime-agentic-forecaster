@@ -500,7 +500,7 @@ class GeminiClient:
         Falls back to ``GEMINI_API_KEY`` then ``GOOGLE_API_KEY`` env vars.
     """
 
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-2.5-flash-preview-04-17"
     max_tokens: int = 2048
     api_key: str | None = None
     _inner: Any = field(default=None, init=False, repr=False)
